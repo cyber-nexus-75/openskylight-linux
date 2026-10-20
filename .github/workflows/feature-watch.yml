@@ -1,0 +1,79 @@
+name: feature-watch
+
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: feature-watch
+  cancel-in-progress: false
+
+env:
+  STATE_BRANCH: feature-watch-state
+  STATE_FILE: state.json
+  REPOS: "lowerygt/OpenSkyLight cyber-nexus-75/OpenSkyLight"
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch current state
+        run: |
+          git fetch --depth=1 origin "$STATE_BRANCH" || true
+          if git rev-parse --verify "origin/$STATE_BRANCH" >/dev/null 2>&1; then
+            git show "origin/$STATE_BRANCH:$STATE_FILE" > "$STATE_FILE" || echo '{}' > "$STATE_FILE"
+          else
+            echo '{}' > "$STATE_FILE"
+          fi
+
+      - name: Check both repos for new releases and commits
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          bash .github/scripts/feature-watch.sh | tee report.md
+          {
+            echo "changed<<__EOF__"
+            cat report.md
+            echo "__EOF__"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Open tracking issue on change
+        if: steps.check.outputs.changed != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          REPORT: ${{ steps.check.outputs.changed }}
+        run: |
+          ts="$(date -u +%Y-%m-%d)"
+          title="New upstream/fork activity needs Linux-variant review ($ts)"
+          existing="$(gh issue list --repo "$REPO" --state open --search "in:title Linux-variant review" --json number,title -q length)"
+          if [ "$existing" = "0" ]; then
+            gh issue create --repo "$REPO" --title "$title" --body "$REPORT" --label "linux-review"
+          else
+            num="$(gh issue list --repo "$REPO" --state open --search "in:title Linux-variant review" --json number -q '.[0].number')"
+            gh issue comment "$num" --repo "$REPO" --body "$REPORT"
+          fi
+
+      - name: Save state
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git rev-parse --verify "origin/$STATE_BRANCH" >/dev/null 2>&1; then
+            git checkout "$STATE_BRANCH"
+          else
+            git checkout --orphan "$STATE_BRANCH"
+            git rm -rf --quiet . || true
+          fi
+          git add -f "$STATE_FILE"
+          git commit -m "Update feature-watch state" || echo "no state change"
+          git push origin "$STATE_BRANCH"
