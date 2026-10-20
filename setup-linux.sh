@@ -6,7 +6,7 @@
 # OpenSkyLight AppImage, and configures LightDM autologin + XDG autostart
 # for the kiosk user.
 #
-# Targets: Debian 12 (bookworm) and Ubuntu 22.04/24.04, amd64, X11.
+# Targets: Debian 13 (trixie), amd64, X11.
 # Usage:
 #   sudo ./setup-linux.sh --appimage <https-url> [options]
 
@@ -114,7 +114,7 @@ detect_distro() {
   . /etc/os-release
   case "${ID:-}" in
     debian|ubuntu) : ;;
-    *) die "unsupported distro: ${ID:-unknown}; use Debian 12+ or Ubuntu 22.04+" ;;
+    *) die "unsupported distro: ${ID:-unknown}; use Debian 13 (trixie)" ;;
   esac
   command -v apt-get >/dev/null 2>&1 || die "apt-get not found"
   log "Detected ${PRETTY_NAME:-$ID}"
@@ -190,8 +190,8 @@ configure_firewall() {
 
 install_appimage() {
   log "Installing AppImage to $INSTALL_DIR"
+  # Debian 13 (trixie) ships the FUSE 2 runtime as libfuse2t64.
   if ! DEBIAN_FRONTEND=noninteractive apt-get install -y -qq libfuse2; then
-    # Ubuntu 24.04 renamed the FUSE 2 runtime.
     DEBIAN_FRONTEND=noninteractive apt-get install -y -qq libfuse2t64 \
       || log "warning: FUSE 2 runtime not found; the AppImage may fail to launch"
   fi
@@ -224,12 +224,19 @@ EOF
   chown -R "$KIOSK_USER":"$(id -gn "$KIOSK_USER")" "/home/$KIOSK_USER/.config"
 
   log "Configuring LightDM autologin"
+  local session="lightdm-xsession"
+  if [ -d /usr/share/xsessions ]; then
+    local first
+    first="$(find /usr/share/xsessions -maxdepth 1 -name '*.desktop' -printf '%f\n' | sort | head -n1)"
+    [ -n "$first" ] && session="${first%.desktop}"
+  fi
+  log "Autologin session: $session"
   mkdir -p /etc/lightdm/lightdm.conf.d
   cat > /etc/lightdm/lightdm.conf.d/70-openskylight-kiosk.conf <<EOF
 [Seat:*]
 autologin-user=$KIOSK_USER
 autologin-user-timeout=0
-autologin-session=xubuntu
+autologin-session=$session
 EOF
   groupadd -f autologin
   usermod -aG autologin "$KIOSK_USER" || log "warning: could not add '$KIOSK_USER' to autologin group"

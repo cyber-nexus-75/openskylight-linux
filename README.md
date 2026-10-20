@@ -2,7 +2,7 @@
 
 One-script bring-up for running [OpenSkyLight](https://github.com/lowerygt/OpenSkyLight) (or your fork of it) as a wall kiosk on a Microsoft Surface device under Linux.
 
-Targets: Debian 12 (bookworm) and Ubuntu 22.04/24.04, amd64, X11. Surface hardware requires the [linux-surface](https://github.com/linux-surface/linux-surface) kernel; stock distro kernels do not drive the touchscreen.
+Targets: Debian 13 (trixie), amd64, X11. Surface hardware requires the [linux-surface](https://github.com/linux-surface/linux-surface) kernel; stock distro kernels do not drive the touchscreen.
 
 ## What it does
 
@@ -47,7 +47,7 @@ Run it once on a fresh install, reboot, and the kiosk is live.
 
 ## Status
 
-Syntax-checked with `bash -n`. Not yet executed on hardware. First validation target: Surface Pro 5, Debian 12, X11, Secure Boot on. Treat the first run on real hardware as the test run.
+Syntax-checked with `bash -n`. Not yet executed on hardware. First validation target: Surface Pro 5, Debian 13 (trixie), X11, Secure Boot on. Treat the first run on real hardware as the test run.
 
 ## Roadmap
 
