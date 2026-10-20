@@ -6,7 +6,7 @@
 # OpenSkyLight AppImage, and configures LightDM autologin + XDG autostart
 # for the kiosk user.
 #
-# Targets: Debian 12 (bookworm) and Ubuntu 22.04/24.04, amd64, X11.
+# Targets: Debian 13 (trixie), amd64, X11.
 # Usage:
 #   sudo ./setup-linux.sh --appimage <https-url> [options]
 
@@ -22,10 +22,15 @@ MOK_PACKAGE="linux-surface-secureboot-mok"
 MOK_PASSWORD="surface"
 INSTALL_DIR="/opt/openskylight"
 DEFAULT_KIOSK_USER="kiosk"
+DEFAULT_APPIMAGE_REPO="cyber-nexus-75/OpenSkyLight"
+GITHUB_API="https://api.github.com"
+COMPANION_PORT=8420
 APPIMAGE_URL=""
+APPIMAGE_REPO=""
 KIOSK_USER="$DEFAULT_KIOSK_USER"
 WITH_MOK=1
 WITH_AUTOLOGIN=1
+WITH_FIREWALL=1
 
 log() { printf '[%s] %s\n' "$SCRIPT_NAME" "$*"; }
 
@@ -33,16 +38,18 @@ die() { printf '[%s] ERROR: %s\n' "$SCRIPT_NAME" "$*" >&2; exit 1; }
 
 usage() {
   cat <<EOF
-Usage: sudo ./setup-linux.sh --appimage <url> [options]
+Usage: sudo ./setup-linux.sh [--appimage <url> | --appimage-repo <owner/repo>] [options]
 
-Required:
-  --appimage <url>      https URL of the OpenSkyLight .AppImage (GitHub Releases asset)
+AppImage source (pick one; default: latest .AppImage release from $DEFAULT_APPIMAGE_REPO):
+  --appimage <url>        https URL of the OpenSkyLight .AppImage (GitHub Releases asset)
+  --appimage-repo <r>     owner/repo to resolve the latest .AppImage release from
 
 Options:
-  --kiosk-user <name>   Account for autologin and autostart (default: kiosk, created if missing)
-  --skip-mok            Do not enroll the linux-surface Secure Boot key
-  --skip-autologin      Do not configure LightDM autologin or the autostart entry
-  -h, --help            Show this help
+  --kiosk-user <name>     Autologin account (default: kiosk, created if missing)
+  --skip-mok              Do not enroll the linux-surface Secure Boot key
+  --skip-autologin        Do not configure LightDM autologin or the autostart entry
+  --skip-firewall         Do not open the companion web app port (TCP 8420)
+  -h, --help              Show this help
 EOF
 }
 
@@ -53,6 +60,15 @@ parse_args() {
         [ $# -ge 2 ] || die "--appimage needs a URL"
         APPIMAGE_URL="$2"
         shift 2
+        ;;
+      --appimage-repo)
+        [ $# -ge 2 ] || die "--appimage-repo needs owner/repo"
+        APPIMAGE_REPO="$2"
+        shift 2
+        ;;
+      --skip-firewall)
+        WITH_FIREWALL=0
+        shift
         ;;
       --kiosk-user)
         [ $# -ge 2 ] || die "--kiosk-user needs a name"
@@ -77,11 +93,15 @@ parse_args() {
         ;;
     esac
   done
-  [ -n "$APPIMAGE_URL" ] || { usage >&2; die "--appimage is required"; }
-  case "$APPIMAGE_URL" in
-    https://*.AppImage) : ;;
-    *) die "--appimage must be an https URL ending in .AppImage" ;;
-  esac
+  if [ -n "$APPIMAGE_URL" ] && [ -n "$APPIMAGE_REPO" ]; then
+    die "--appimage and --appimage-repo are mutually exclusive"
+  fi
+  if [ -n "$APPIMAGE_URL" ]; then
+    case "$APPIMAGE_URL" in
+      https://*.AppImage) : ;;
+      *) die "--appimage must be an https URL ending in .AppImage" ;;
+    esac
+  fi
 }
 
 require_root() {
@@ -94,7 +114,7 @@ detect_distro() {
   . /etc/os-release
   case "${ID:-}" in
     debian|ubuntu) : ;;
-    *) die "unsupported distro: ${ID:-unknown}; use Debian 12+ or Ubuntu 22.04+" ;;
+    *) die "unsupported distro: ${ID:-unknown}; use Debian 13 (trixie)" ;;
   esac
   command -v apt-get >/dev/null 2>&1 || die "apt-get not found"
   log "Detected ${PRETTY_NAME:-$ID}"
@@ -130,10 +150,48 @@ enroll_mok() {
   fi
 }
 
+resolve_appimage_url() {
+  if [ -n "$APPIMAGE_URL" ]; then
+    log "Using explicit AppImage URL"
+    return
+  fi
+  local repo="${APPIMAGE_REPO:-$DEFAULT_APPIMAGE_REPO}"
+  log "Resolving latest AppImage from GitHub Releases: $repo"
+  local url
+  url="$(curl -fsSL "$GITHUB_API/repos/$repo/releases/latest" \
+    | grep -oE '"browser_download_url":\s*"[^"]+\.AppImage"' \
+    | head -n1 \
+    | sed -E 's/.*"(https:[^"]+)"$/\1/')" || true
+  [ -n "$url" ] || die "no .AppImage asset found in the latest release of $repo; build one or pass --appimage"
+  APPIMAGE_URL="$url"
+  log "Latest AppImage: $APPIMAGE_URL"
+}
+
+configure_firewall() {
+  if [ "$WITH_FIREWALL" -eq 0 ]; then
+    log "Skipping firewall configuration (--skip-firewall)"
+    return
+  fi
+  if command -v ufw >/dev/null 2>&1; then
+    log "Allowing companion web app on TCP $COMPANION_PORT (ufw)"
+    ufw allow "$COMPANION_PORT/tcp" comment 'OpenSkyLight companion' \
+      || log "warning: could not open port $COMPANION_PORT in ufw"
+    return
+  fi
+  if command -v firewall-cmd >/dev/null 2>&1; then
+    log "Allowing companion web app on TCP $COMPANION_PORT (firewalld)"
+    firewall-cmd --add-port="$COMPANION_PORT/tcp" \
+      && firewall-cmd --permanent --add-port="$COMPANION_PORT/tcp" \
+      || log "warning: could not open port $COMPANION_PORT in firewalld"
+    return
+  fi
+  log "No firewall detected; nothing to open for TCP $COMPANION_PORT"
+}
+
 install_appimage() {
   log "Installing AppImage to $INSTALL_DIR"
+  # Debian 13 (trixie) ships the FUSE 2 runtime as libfuse2t64.
   if ! DEBIAN_FRONTEND=noninteractive apt-get install -y -qq libfuse2; then
-    # Ubuntu 24.04 renamed the FUSE 2 runtime.
     DEBIAN_FRONTEND=noninteractive apt-get install -y -qq libfuse2t64 \
       || log "warning: FUSE 2 runtime not found; the AppImage may fail to launch"
   fi
@@ -166,12 +224,19 @@ EOF
   chown -R "$KIOSK_USER":"$(id -gn "$KIOSK_USER")" "/home/$KIOSK_USER/.config"
 
   log "Configuring LightDM autologin"
+  local session="lightdm-xsession"
+  if [ -d /usr/share/xsessions ]; then
+    local first
+    first="$(find /usr/share/xsessions -maxdepth 1 -name '*.desktop' -printf '%f\n' | sort | head -n1)"
+    [ -n "$first" ] && session="${first%.desktop}"
+  fi
+  log "Autologin session: $session"
   mkdir -p /etc/lightdm/lightdm.conf.d
   cat > /etc/lightdm/lightdm.conf.d/70-openskylight-kiosk.conf <<EOF
 [Seat:*]
 autologin-user=$KIOSK_USER
 autologin-user-timeout=0
-autologin-session=xubuntu
+autologin-session=$session
 EOF
   groupadd -f autologin
   usermod -aG autologin "$KIOSK_USER" || log "warning: could not add '$KIOSK_USER' to autologin group"
@@ -184,8 +249,10 @@ main() {
   add_surface_repo
   install_surface_kernel
   enroll_mok
+  resolve_appimage_url
   install_appimage
   configure_kiosk
+  configure_firewall
   log "Done. Reboot to activate the surface kernel and start the kiosk."
 }
 
