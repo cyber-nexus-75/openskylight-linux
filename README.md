@@ -51,7 +51,6 @@ Syntax-checked with `bash -n`. Not yet executed on hardware. First validation ta
 
 ## Roadmap
 
-- CI: shellcheck and `bash -n` on push
 - Preseed file for repeatable fleet installs
 - systemd session hardening for the Electron process (memory/CPU limits)
 
