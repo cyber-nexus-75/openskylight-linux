@@ -19,7 +19,7 @@ SURFACE_APT_LIST="/etc/apt/sources.list.d/linux-surface.list"
 SURFACE_APT_LINE="deb [arch=amd64] https://pkg.surfacelinux.com/debian release main"
 SURFACE_PACKAGES=(linux-image-surface linux-headers-surface libwacom-surface iptsd)
 MOK_PACKAGE="linux-surface-secureboot-mok"
-MOK_PASSWORD="surface"
+MOK_PASSWORD=""
 INSTALL_DIR="/opt/openskylight"
 DEFAULT_KIOSK_USER="kiosk"
 APPIMAGE_URL=""
@@ -120,11 +120,13 @@ enroll_mok() {
     log "Skipping Secure Boot key enrollment (--skip-mok)"
     return
   fi
-  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq mokutil
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq mokutil openssl
   if [ "$(mokutil --sb-state 2>/dev/null || true)" = "SecureBoot enabled" ]; then
     log "Secure Boot is enabled; enrolling the linux-surface signing key"
     DEBIAN_FRONTEND=noninteractive apt-get install -y "$MOK_PACKAGE"
-    log "IMPORTANT: at the next reboot, MOK Manager asks for a one-time password: $MOK_PASSWORD"
+    # Generate a random one-time enrollment password instead of a fixed value.
+    MOK_PASSWORD="$(openssl rand -hex 12)"
+    log "IMPORTANT: at the next reboot, MOK Manager asks for this one-time password: $MOK_PASSWORD"
   else
     log "Secure Boot is disabled; skipping MOK enrollment"
   fi
