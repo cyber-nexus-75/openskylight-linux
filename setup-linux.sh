@@ -19,7 +19,8 @@ SURFACE_APT_LIST="/etc/apt/sources.list.d/linux-surface.list"
 SURFACE_APT_LINE="deb [arch=amd64] https://pkg.surfacelinux.com/debian release main"
 SURFACE_PACKAGES=(linux-image-surface linux-headers-surface libwacom-surface iptsd)
 MOK_PACKAGE="linux-surface-secureboot-mok"
-MOK_PASSWORD="surface"
+# One-time MOK enrollment password: generated fresh per run. Never hardcode it.
+MOK_PASSWORD="$(head -c 32 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 16)"
 INSTALL_DIR="/opt/openskylight"
 DEFAULT_KIOSK_USER="kiosk"
 APPIMAGE_URL=""
@@ -94,7 +95,7 @@ detect_distro() {
   . /etc/os-release
   case "${ID:-}" in
     debian|ubuntu) : ;;
-    *) die "unsupported distro: ${ID:-unknown}; use Debian 12+ or Ubuntu 22.04+" ;;
+    *) die "unsupported distro: ${ID:-unknown}; use Debian 12+ or Ubuntu 22.04/24.04+" ;;
   esac
   command -v apt-get >/dev/null 2>&1 || die "apt-get not found"
   log "Detected ${PRETTY_NAME:-$ID}"
@@ -174,7 +175,7 @@ autologin-user-timeout=0
 autologin-session=xubuntu
 EOF
   groupadd -f autologin
-  usermod -aG autologin "$KIOSK_USER" || log "warning: could not add '$KIOSK_USER' to autologin group"
+  usermod -aG autologin "$KIOSK_USER" || log "warning: could not add '$KIOSK_USER' to the autologin group"
 }
 
 main() {
