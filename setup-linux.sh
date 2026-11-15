@@ -13,10 +13,10 @@
 set -euo pipefail
 
 SCRIPT_NAME="$(basename "$0")"
-APT_KEY_DIR="/etc/apt/trusted.gpg.d"
+APT_KEYRING_DIR="/etc/apt/keyrings"
 SURFACE_KEY_URL="https://raw.githubusercontent.com/linux-surface/linux-surface/master/pkg/keys/surface.asc"
 SURFACE_APT_LIST="/etc/apt/sources.list.d/linux-surface.list"
-SURFACE_APT_LINE="deb [arch=amd64] https://pkg.surfacelinux.com/debian release main"
+SURFACE_APT_LINE="deb [arch=amd64 signed-by=/etc/apt/keyrings/linux-surface.gpg] https://pkg.surfacelinux.com/debian release main"
 SURFACE_PACKAGES=(linux-image-surface linux-headers-surface libwacom-surface iptsd)
 MOK_PACKAGE="linux-surface-secureboot-mok"
 MOK_PASSWORD="surface"
@@ -104,7 +104,10 @@ add_surface_repo() {
   log "Adding the linux-surface apt repository"
   apt-get update -qq
   DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl gnupg
-  curl -fsSL "$SURFACE_KEY_URL" | gpg --dearmor > "$APT_KEY_DIR/linux-surface.gpg"
+  mkdir -p "$APT_KEYRING_DIR"
+  chmod 755 "$APT_KEYRING_DIR"
+  curl -fsSL "$SURFACE_KEY_URL" | gpg --dearmor > "$APT_KEYRING_DIR/linux-surface.gpg"
+  chmod 644 "$APT_KEYRING_DIR/linux-surface.gpg"
   printf '%s\n' "$SURFACE_APT_LINE" > "$SURFACE_APT_LIST"
   apt-get update -qq
 }
