@@ -2,13 +2,15 @@
 # OpenSkyLight Linux kiosk bring-up for Microsoft Surface devices.
 #
 # Installs the linux-surface kernel + iptsd (touch support), optionally
-# enrolls the linux-surface Secure Boot signing key, installs the
-# OpenSkyLight AppImage, and configures LightDM autologin + XDG autostart
-# for the kiosk user.
+# enrolls the linux-surface Secure Boot signing key, then either installs
+# the OpenSkyLight AppImage or points a browser kiosk at a server-hosted
+# OpenSkyLight web app (--kiosk-url), and configures LightDM autologin +
+# XDG autostart for the kiosk user.
 #
 # Targets: Debian 12 (bookworm) and Ubuntu 22.04/24.04, amd64, X11.
 # Usage:
 #   sudo ./setup-linux.sh --appimage <https-url> [options]
+#   sudo ./setup-linux.sh --kiosk-url <http-url> [options]
 
 set -euo pipefail
 
@@ -23,6 +25,8 @@ MOK_PASSWORD="surface"
 INSTALL_DIR="/opt/openskylight"
 DEFAULT_KIOSK_USER="kiosk"
 APPIMAGE_URL=""
+KIOSK_URL=""
+CHROMIUM_BIN=""
 KIOSK_USER="$DEFAULT_KIOSK_USER"
 WITH_MOK=1
 WITH_AUTOLOGIN=1
@@ -33,10 +37,11 @@ die() { printf '[%s] ERROR: %s\n' "$SCRIPT_NAME" "$*" >&2; exit 1; }
 
 usage() {
   cat <<EOF
-Usage: sudo ./setup-linux.sh --appimage <url> [options]
+Usage: sudo ./setup-linux.sh (--appimage <url> | --kiosk-url <url>) [options]
 
-Required:
-  --appimage <url>      https URL of the OpenSkyLight .AppImage (GitHub Releases asset)
+Required (exactly one):
+  --appimage <url>      https URL of the OpenSkyLight .AppImage (GitHub Releases asset) — run the app locally
+  --kiosk-url <url>     http(s) URL of a server-hosted OpenSkyLight web app (npm run start:server on the server) — the device opens it in a browser kiosk
 
 Options:
   --kiosk-user <name>   Account for autologin and autostart (default: kiosk, created if missing)
@@ -52,6 +57,11 @@ parse_args() {
       --appimage)
         [ $# -ge 2 ] || die "--appimage needs a URL"
         APPIMAGE_URL="$2"
+        shift 2
+        ;;
+      --kiosk-url)
+        [ $# -ge 2 ] || die "--kiosk-url needs a URL"
+        KIOSK_URL="$2"
         shift 2
         ;;
       --kiosk-user)
@@ -77,11 +87,24 @@ parse_args() {
         ;;
     esac
   done
-  [ -n "$APPIMAGE_URL" ] || { usage >&2; die "--appimage is required"; }
-  case "$APPIMAGE_URL" in
-    https://*.AppImage) : ;;
-    *) die "--appimage must be an https URL ending in .AppImage" ;;
-  esac
+  if [ -n "$APPIMAGE_URL" ] && [ -n "$KIOSK_URL" ]; then
+    usage >&2
+    die "pass only one of --appimage or --kiosk-url"
+  fi
+  if [ -n "$APPIMAGE_URL" ]; then
+    case "$APPIMAGE_URL" in
+      https://*.AppImage) : ;;
+      *) die "--appimage must be an https URL ending in .AppImage" ;;
+    esac
+  elif [ -n "$KIOSK_URL" ]; then
+    case "$KIOSK_URL" in
+      http://*|https://*) : ;;
+      *) die "--kiosk-url must be an http(s) URL" ;;
+    esac
+  else
+    usage >&2
+    die "one of --appimage or --kiosk-url is required"
+  fi
 }
 
 require_root() {
@@ -142,6 +165,20 @@ install_appimage() {
   chmod 755 "$INSTALL_DIR/openskylight.AppImage"
 }
 
+# Server mode: the app runs on another machine (npm run start:server there);
+# this device just boots into a fullscreen browser pointed at it.
+install_browser_kiosk() {
+  log "Installing Chromium for the web kiosk ($KIOSK_URL)"
+  if ! DEBIAN_FRONTEND=noninteractive apt-get install -y -qq chromium; then
+    # Ubuntu ships chromium as a snap via the chromium-browser package.
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq chromium-browser \
+      || die "could not install chromium (or chromium-browser)"
+  fi
+  CHROMIUM_BIN="$(command -v chromium || command -v chromium-browser)"
+  [ -n "$CHROMIUM_BIN" ] || die "chromium binary not found after install"
+  log "Chromium at $CHROMIUM_BIN"
+}
+
 configure_kiosk() {
   if [ "$WITH_AUTOLOGIN" -eq 0 ]; then
     log "Skipping autologin and autostart (--skip-autologin)"
@@ -156,12 +193,20 @@ configure_kiosk() {
 
   log "Configuring XDG autostart for '$KIOSK_USER'"
   local autostart_dir="/home/$KIOSK_USER/.config/autostart"
+  local exec_line
+  if [ -n "$KIOSK_URL" ]; then
+    # If the server has OSL_SERVER_TOKEN set, point at the login URL once:
+    # it sets the session cookie and redirects to the app.
+    exec_line="$CHROMIUM_BIN --kiosk --noerrdialogs --disable-infobars --disable-session-crashed-bubble --touch-events=enabled --autoplay-policy=no-user-gesture-required $KIOSK_URL"
+  else
+    exec_line="$INSTALL_DIR/openskylight.AppImage --kiosk"
+  fi
   mkdir -p "$autostart_dir"
   cat > "$autostart_dir/openskylight.desktop" <<EOF
 [Desktop Entry]
 Type=Application
 Name=OpenSkyLight Kiosk
-Exec=$INSTALL_DIR/openskylight.AppImage --kiosk
+Exec=$exec_line
 EOF
   chown -R "$KIOSK_USER":"$(id -gn "$KIOSK_USER")" "/home/$KIOSK_USER/.config"
 
@@ -184,7 +229,11 @@ main() {
   add_surface_repo
   install_surface_kernel
   enroll_mok
-  install_appimage
+  if [ -n "$KIOSK_URL" ]; then
+    install_browser_kiosk
+  else
+    install_appimage
+  fi
   configure_kiosk
   log "Done. Reboot to activate the surface kernel and start the kiosk."
 }
