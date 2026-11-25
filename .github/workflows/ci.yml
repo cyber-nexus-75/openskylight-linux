@@ -1,0 +1,22 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck
+        uses: ludeeus/action-shellcheck@master
+        with:
+          severity: error
+      - name: bash syntax check
+        run: |
+          bash -n setup-linux.sh
+          bash setup-linux.sh -h >/dev/null
+      - name: shellcheck availability sanity
+        run: shellcheck --version
